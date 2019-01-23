@@ -20,13 +20,20 @@ volatile unsigned char escape;
 volatile unsigned char puzzling;
 volatile unsigned char entering;
 volatile unsigned char loading;
+volatile unsigned char menuing;
 volatile unsigned char load_count;
 volatile unsigned char last_load_count;
 volatile int select_x;
 volatile int select_y;
+volatile unsigned int menu_select;
+volatile unsigned char menu_enter;
+volatile unsigned int menu_max;
 board *global_board;
 
 char str_buffer[256];
+
+char *main_menu[] = {"Generate Board", "Load Board", "Empty Board", "Exit"};
+char *options_menu[] = {"Resume", "Save Board", "Load Board", "Exit"};
 
 unsigned short selection[9] = {
 	0x7FC0,
@@ -442,11 +449,12 @@ void mark_original(board *b){
 void display_board(board *b){
 	unsigned char i;
 	unsigned char j;
-	FastFillRect(LCD_MEM, 36, 11, 124, 99, A_NORMAL);
+	FastFillRect_R(LCD_MEM, 36, 11, 124, 99, A_NORMAL);
 	for(i = 0; i < 2; i++){
 		FastDrawVLine(LCD_MEM, 30*i + 65, 11, 99, A_REVERSE);
 		FastDrawHLine(LCD_MEM, 36, 124, 30*i + 40, A_REVERSE);
 	}
+	FontSetSys(F_6x8);
 	for(i = 0; i < 9; i++){
 		for(j = 0; j < 9; j++){
 			if(b->values[i][j]){
@@ -458,7 +466,8 @@ void display_board(board *b){
 }
 
 void display_message(){
-	FastFillRect(LCD_MEM, 0, 0, 159, 10, A_REVERSE);
+	FastFillRect_R(LCD_MEM, 0, 0, 159, 10, A_REVERSE);
+	FontSetSys(F_6x8);
 	DrawStr(0, 0, str_buffer, A_NORMAL);
 }
 
@@ -488,6 +497,90 @@ void display_selection(){
 	Sprite16_XOR(select_x*10 + 35, select_y*10 + 11, 9, selection, LCD_MEM);
 }
 
+void render_menu(char *title, char **items, unsigned int num_items){
+	unsigned int title_width;
+	unsigned int option_width;
+
+	FastFillRect_R(LCD_MEM, 1, 35, 158, 75, A_REVERSE);
+	FastDrawHLine(LCD_MEM, 0, 159, 34, A_NORMAL);
+	FastDrawHLine(LCD_MEM, 0, 159, 44, A_NORMAL);
+	FastDrawVLine(LCD_MEM, 0, 34, 76, A_NORMAL);
+	FastDrawVLine(LCD_MEM, 159, 34, 76, A_NORMAL);
+	FastDrawHLine(LCD_MEM, 0, 159, 76, A_NORMAL);
+	title_width = DrawStrWidth(title, F_6x8);
+	FontSetSys(F_6x8);
+	DrawStr(80 - title_width/2, 36, title, A_NORMAL);
+	if(menu_select > 0){
+		option_width = DrawStrWidth(items[menu_select - 1], F_6x8);
+		DrawStr(80 - option_width/2, 46, items[menu_select - 1], A_NORMAL);
+	}
+	option_width = DrawStrWidth(items[menu_select], F_6x8);
+	if(option_width < 158){
+		FastFillRect_R(LCD_MEM, 79 - option_width/2, 55, 81 + option_width/2, 64, A_NORMAL);
+	}
+	DrawStr(80 - option_width/2, 56, items[menu_select], A_REVERSE);
+	if(menu_select < menu_max){
+		option_width = DrawStrWidth(items[menu_select + 1], F_6x8);
+		DrawStr(80 - option_width/2, 66, items[menu_select + 1], A_NORMAL);
+	}
+}
+
+int do_menu(char *title, char **items, unsigned int num_items){
+	unsigned int last_menu_select;
+
+	menu_select = 0;
+	menu_max = num_items - 1;
+	menu_enter = 0;
+	menuing = 1;
+	while(!menu_enter && !escape){
+		last_menu_select = menu_select;
+		render_menu(title, items, num_items);
+		while(last_menu_select == menu_select && !menu_enter && !escape){/*pass*/}
+	}
+	menuing = 0;
+	
+	if(escape){
+		escape = 0;
+		return -1;
+	}
+
+	return menu_select;
+}
+
+char *do_text_entry(char *title){
+	char *buffer;
+	unsigned char cursor;
+	unsigned int key;
+
+	menu_select = 0;
+	menu_max = 0;
+	buffer = calloc(10, sizeof(char));
+	cursor = 0;
+	buffer[cursor] = '_';
+	key = 0;
+	menuing = 1;
+	while(key != KEY_ENTER){
+		render_menu(title, &buffer, 1);
+		key = ngetchx();
+		if(key >= ' ' && key <= '~' && cursor < 8){
+			buffer[cursor] = key;
+			cursor++;
+			buffer[cursor] = '_';
+		} else if(key == KEY_BACKSPACE && cursor){
+			buffer[cursor] = (char) 0;
+			cursor--;
+			buffer[cursor] = '_';
+		} else if(key == KEY_ESC){
+			free(buffer);
+			return (char *) 0;
+		}
+	}
+
+	buffer[cursor] = (char) 0;
+	menuing = 0;
+	return buffer;
+}
+
 DEFINE_INT_HANDLER (update){
 	unsigned int key;
 
@@ -495,7 +588,7 @@ DEFINE_INT_HANDLER (update){
 		if(key == KEY_ESC){
 			escape = 1;
 		}
-		if(puzzling && !entering){
+		if(puzzling && !entering && !menuing){
 			if(key == KEY_LEFT){
 				display_selection();
 				if(select_x > 0){
@@ -537,12 +630,28 @@ DEFINE_INT_HANDLER (update){
 				global_board->notes[select_x][select_y] ^= 1<<(key - '1');
 				display_notes();
 			}
-		} else if(entering){
+		} else if(entering && !menuing){
 			entering = 0;
 			if(key >= (unsigned int) '0' && key <= (unsigned int) '9'){
 				global_board->values[select_x][select_y] = key - (unsigned int) '0';
 				display_board(global_board);
 				display_selection();
+			}
+		} else if(menuing){
+			if(key == KEY_UP){
+				if(menu_select > 0){
+					menu_select--;
+				} else {
+					menu_select = menu_max;
+				}
+			} else if(key == KEY_DOWN){
+				if(menu_select < menu_max){
+					menu_select++;
+				} else {
+					menu_select = 0;
+				}
+			} else if(key == KEY_ENTER){
+				menu_enter = 1;
 			}
 		}
 	}
@@ -556,10 +665,18 @@ DEFINE_INT_HANDLER (update){
 }
 
 void _main(){
+	int selection;
+	char *file_name;
+	FILE *fp;
+	unsigned char in_main_menu;
+	unsigned char quit;
+
+	quit = 0;
 	escape = 0;
 	puzzling = 0;
 	entering = 0;
 	loading = 0;
+	menuing = 0;
 	load_count = 0;
 	last_load_count = 0;
 	select_x = 0;
@@ -571,22 +688,139 @@ void _main(){
 	old_int_5 = GetIntVec(AUTO_INT_5);
 	SetIntVec(AUTO_INT_5, update);
 
-	printf("Sudoku puzzle\ngenerator\n\nPress any key");
-	ngetchx();
-	global_board = create_board();
-	fill_board(global_board, 0, 0, rand()%9 + 1, 0);
-	loading = 1;
-	generate_puzzle(global_board);
-	mark_original(global_board);
-	loading = 0;
+	FontSetSys(F_8x10);
+	DrawStr(33, 12, "Super Sudoku", A_NORMAL);
+	FontSetSys(F_4x6);
+	DrawStr(55, 25, "By Ben Jones", A_NORMAL);
+	in_main_menu = 1;
+	while(in_main_menu){
+		selection = do_menu("Sudoku Modes", main_menu, 4);
+		switch(selection){
+			case 0:
+				global_board = create_board();
+				fill_board(global_board, 0, 0, rand()%9 + 1, 0);
+				loading = 1;
+				generate_puzzle(global_board);
+				mark_original(global_board);
+				loading = 0;
+				in_main_menu = 0;
+				break;
+			case 1:
+				file_name = do_text_entry("Enter file name");
+				if(file_name){
+					fp = fopen(file_name, "rb");
+					free(file_name);
+					if(fp){
+						fseek(fp, 0, SEEK_SET);
+					}
+					if(!fp || feof(fp)){
+						if(fp){
+							fclose(fp);
+						}
+						file_name = "Failed to load file";
+						do_menu("Enter file name", &file_name, 1);
+					} else {
+						global_board = malloc(sizeof(board));
+						fread(global_board, sizeof(board), 1, fp);
+						fclose(fp);
+						global_board->next_square = (coord_queue *) 0;
+						in_main_menu = 0;
+					}
+				}
+				break;
+			case 2:
+				global_board = create_board();
+				in_main_menu = 0;
+				break;
+			case 3:
+				SetIntVec(AUTO_INT_5, old_int_5);
+				OSInitKeyInitDelay(old_delay);
+				return;
+		}
+	}
+
 	clrscr();
 	display_board(global_board);
 	display_selection();
 	display_notes();
 	puzzling = 1;
 	
-	while(!escape){
-	//pass
+	while(!quit){
+		while(escape){
+			escape = 0;
+			selection = do_menu("Options", options_menu, 4);
+			escape = 1;
+			switch(selection){
+				case -1:
+					escape = 0;
+					break;
+				case 0: 
+					escape = 0;
+					break;
+				case 1:
+					escape = 0;
+					file_name = do_text_entry("Enter file name");
+					escape = 1;
+					if(!file_name){
+						break;
+					}
+					fp = fopen(file_name, "wb");
+					free(file_name);
+					if(!fp){
+						file_name = "Failed to save file";
+						escape = 0;
+						do_menu("Enter file name", &file_name, 1);
+						escape = 1;
+					} else {
+						fwrite(global_board, sizeof(board), 1, fp);
+						fclose(fp);
+					}
+					break;
+				case 2:
+					escape = 0;
+					file_name = do_text_entry("Enter file name");
+					escape = 1;
+					if(!file_name){
+						break;
+					}
+					fp = fopen(file_name, "rb");
+					free(file_name);
+					if(fp){
+						fseek(fp, 0, SEEK_SET);
+					}
+					if(!fp || feof(fp)){
+						if(fp){
+							fclose(fp);
+						}
+						file_name = "Failed to load file";
+						escape = 0;
+						do_menu("Enter file name", &file_name, 1);
+						escape = 1;
+					} else {
+						free_board(global_board);
+						global_board = malloc(sizeof(board));
+						fread(global_board, sizeof(board), 1, fp);
+						fclose(fp);
+						global_board->next_square = (coord_queue *) 0;
+						clrscr();
+						display_board(global_board);
+						display_selection();
+						display_notes();
+					}
+					break;
+				case 3:
+					escape = 0;
+					quit = 1;
+					break;
+			}
+			if(!escape){
+				clrscr();
+				display_board(global_board);
+				display_selection();
+				display_notes();
+			}
+		}
+
 	}
 
 	free_board(global_board);
