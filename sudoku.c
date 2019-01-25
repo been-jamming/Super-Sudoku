@@ -28,12 +28,14 @@ volatile int select_y;
 volatile unsigned int menu_select;
 volatile unsigned char menu_enter;
 volatile unsigned int menu_max;
+volatile unsigned char win;
 board *global_board;
 
 char str_buffer[256];
 
 char *main_menu[] = {"Generate Board", "Load Board", "Empty Board", "Exit"};
 char *options_menu[] = {"Resume", "Save Board", "Load Board", "Exit"};
+char *win_menu[] = {"Generate New", "Continue", "Exit"};
 
 unsigned short selection[9] = {
 	0x7FC0,
@@ -126,6 +128,8 @@ board *create_board(){
 		for(y = 0; y < 9; y++){
 			output->values[x][y] = 0;
 			output->notes[x][y] = 0;
+			output->true_values[x][y] = 0;
+			output->original[x][y] = 0;
 			c = create_coord_queue(c_pointer->x, c_pointer->y);
 			c->next = output->next_square;
 			if(c->next){
@@ -190,13 +194,21 @@ unsigned char fill_board(board *b, unsigned char x, unsigned char y, unsigned ch
 	}
 
 	r1 = rand();
-	if(x < 8){
-		x2 = x + 1;
-		y2 = y;
-	} else {
-		x2 = 0;
-		y2 = y + 1;
+
+	do{
+		if(x < 8){
+			x2 = x + 1;
+			y2 = y;
+		} else {
+			x2 = 0;
+			y2 = y + 1;
+		}
+	} while(y2 <= 8 && b->values[x2][y2]);
+	
+	if(y2 > 8){
+		return 1;
 	}
+
 	for(i = 0; i < 9; i++){
 		v = (i + r1)%9 + 1;
 		if(possible(b, x2, y2, v) && fill_board(b, x2, y2, v, depth + 1)){
@@ -581,6 +593,21 @@ char *do_text_entry(char *title){
 	return buffer;
 }
 
+unsigned char check_win(){
+	unsigned char x;
+	unsigned char y;
+
+	for(x = 0; x < 9; x++){
+		for(y = 0; y < 9; y++){
+			if(!global_board->true_values[x][y] || !global_board->values[x][y] || global_board->values[x][y] != global_board->true_values[x][y]){
+				return 0;
+			}
+		}
+	}
+
+	return 1;
+}
+
 DEFINE_INT_HANDLER (update){
 	unsigned int key;
 
@@ -636,6 +663,7 @@ DEFINE_INT_HANDLER (update){
 				global_board->values[select_x][select_y] = key - (unsigned int) '0';
 				display_board(global_board);
 				display_selection();
+				win = check_win();
 			}
 		} else if(menuing){
 			if(key == KEY_UP){
@@ -681,6 +709,7 @@ void _main(){
 	last_load_count = 0;
 	select_x = 0;
 	select_y = 0;
+	win = 0;
 	clrscr();
 	randomize();
 	kbq = kbd_queue();
@@ -744,8 +773,48 @@ void _main(){
 	display_selection();
 	display_notes();
 	puzzling = 1;
+	win = check_win();
 	
 	while(!quit){
+		if(win){
+			selection = do_menu("You win!", win_menu, 3);
+			switch(selection){
+				case -1:
+					win = 0;
+					global_board->true_values[0][0] = 0;
+					clrscr();
+					display_board(global_board);
+					display_selection();
+					display_notes();
+					break;
+				case 0:
+					free_board(global_board);
+					global_board = create_board();
+					fill_board(global_board, 0, 0, rand()%9 + 1, 0);
+					loading = 1;
+					generate_puzzle(global_board);
+					mark_original(global_board);
+					loading = 0;
+					clrscr();
+					display_board(global_board);
+					display_selection();
+					display_notes();
+					win = check_win();
+					break;
+				case 1:
+					win = 0;
+					global_board->true_values[0][0] = 0;
+					clrscr();
+					display_board(global_board);
+					display_selection();
+					display_notes();
+					break;
+				case 2:
+					quit = 1;
+					break;
+			}
+		}
+
 		while(escape){
 			escape = 0;
 			selection = do_menu("Options", options_menu, 4);
