@@ -686,7 +686,10 @@ DEFINE_INT_HANDLER (update){
 	if(loading){
 		if(last_load_count != load_count){
 			clrscr();
-			printf("Loading: %d%%\n",(((int) load_count)*100/81));
+			FastOutlineRect_R(LCD_MEM, 0, 45, 159, 55, A_NORMAL);
+			FastFillRect_R(LCD_MEM, 0, 45, ((int) load_count)*159/81, 55, A_NORMAL);
+			sprintf(str_buffer, "Loading: %d%%",(((int) load_count)*100/81));
+			DrawStr(40, 35, str_buffer, A_NORMAL);
 			last_load_count = load_count;
 		}
 	}
