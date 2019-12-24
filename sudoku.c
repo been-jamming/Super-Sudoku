@@ -1,7 +1,7 @@
 #define USE_TI89
 #define SAVE_SCREEN
 #include <tigcclib.h>
-#include "sudoku2.h"
+#include "sudoku.h"
 #include "extgraph.h"
 
 /* 
